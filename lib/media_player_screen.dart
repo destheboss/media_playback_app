@@ -34,25 +34,27 @@ class MediaPlayerScreenState extends State<MediaPlayerScreen> {
 
     if (result != null && result.files.single.path != null) {
       String filePath = result.files.single.path!;
-      String extension = filePath.split('.').last;
+      _initializeFile(filePath);
+    }
+  }
 
-      setState(() {
-        _selectedFilePath = filePath;
-        _fileType = (extension == 'mp3') ? 'audio' : 'video';
-      });
+  void _initializeFile(String filePath) {
+    String extension = filePath.split('.').last;
+    setState(() {
+      _selectedFilePath = filePath;
+      _fileType = extension == 'mp3' ? 'audio' : 'video';
+    });
 
-      if (_fileType == 'audio') {
-        await _loadAudioFile(filePath);
-      } else {
-        await _loadVideoFile(filePath);
-      }
+    if (_fileType == 'audio') {
+      _loadAudioFile(filePath);
+    } else {
+      _loadVideoFile(filePath);
     }
   }
 
   Future<void> _loadAudioFile(String path) async {
     setState(() {
-      _currentPosition = Duration.zero;
-      _totalDuration = Duration.zero;
+      _resetMediaPosition();
     });
 
     await _audioPlayer.setFilePath(path);
@@ -69,30 +71,26 @@ class MediaPlayerScreenState extends State<MediaPlayerScreen> {
   }
 
   Future<void> _loadVideoFile(String path) async {
+    _videoController = VideoPlayerController.file(File(path));
+
+    await _videoController!.initialize();
     setState(() {
-      _currentPosition = Duration.zero;
-      _totalDuration = Duration.zero;
+      _resetMediaPosition();
+      _totalDuration = _videoController!.value.duration;
     });
-    
-    _videoController = VideoPlayerController.file(File(path))
-      ..initialize().then((_) {
+
+    _videoController!.addListener(() {
+      if (mounted) {
         setState(() {
-          _totalDuration = _videoController!.value.duration;
+          _currentPosition = _videoController!.value.position;
         });
-        _videoController!.addListener(() {
-          setState(() {
-            _currentPosition = _videoController!.value.position;
-          });
-        });
-      });
+      }
+    });
   }
 
-  double _getVideoRotationAngle() {
-    final orientation = _videoController!.value.size;
-    if (orientation.width < orientation.height) {
-      return 1.57;
-    }
-    return 0.0;
+  void _resetMediaPosition() {
+    _currentPosition = Duration.zero;
+    _totalDuration = Duration.zero;
   }
 
   void _onSeek(double value) {
@@ -107,45 +105,67 @@ class MediaPlayerScreenState extends State<MediaPlayerScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Media Player'),
+      appBar: AppBar(title: const Text('Media Player')),
+      body: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          _buildFilePickerButton(),
+          const SizedBox(height: 20),
+          _buildMediaDisplay(context),
+          const SizedBox(height: 20),
+          _playbackControls(),
+          const SizedBox(height: 20),
+          _seekBar(),
+        ],
       ),
-      body: SingleChildScrollView(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            ElevatedButton(
-              onPressed: _pickFile,
-              child: const Text('Select File'),
+    );
+  }
+
+  Widget _buildFilePickerButton() {
+    return ElevatedButton(
+      onPressed: _pickFile,
+      child: const Text('Select File'),
+    );
+  }
+
+  Widget _buildMediaDisplay(BuildContext context) {
+    if (_selectedFilePath == null) {
+      return const Icon(Icons.video_library, size: 100);
+    }
+    return _fileType == 'audio'
+        ? const Icon(Icons.music_note, size: 100)
+        : _buildConstrainedVideoPlayer(context);
+  }
+
+  Widget _buildConstrainedVideoPlayer(BuildContext context) {
+    if (_videoController == null || !_videoController!.value.isInitialized) {
+      return const CircularProgressIndicator();
+    }
+
+    bool isPortrait = _videoController!.value.aspectRatio < 1.0;
+    return Center(
+      child: Container(
+        height: isPortrait
+            ? MediaQuery.of(context).size.height * 0.5
+            : MediaQuery.of(context).size.height * 0.35,
+        width: double.infinity,
+        child: AspectRatio(
+          aspectRatio: _videoController!.value.aspectRatio,
+          child: Transform.rotate(
+            angle: isPortrait ? 90 * 3.1416 / 180 : 0,
+            child: FittedBox(
+              fit: BoxFit.contain,
+              child: SizedBox(
+                width: isPortrait
+                    ? _videoController!.value.size.height
+                    : _videoController!.value.size.width,
+                height: isPortrait
+                    ? _videoController!.value.size.width
+                    : _videoController!.value.size.height,
+                child: VideoPlayer(_videoController!),
+              ),
             ),
-            const SizedBox(height: 20),
-            _selectedFilePath != null
-                ? _fileType == 'audio'
-                    ? const Icon(Icons.music_note, size: 100)
-                    : AspectRatio(
-                        aspectRatio: _videoController!.value.aspectRatio,
-                        child: Container(
-                          constraints: BoxConstraints(
-                            maxHeight: MediaQuery.of(context).size.height * 0.5,
-                          ),
-                          child: FittedBox(
-                            fit: BoxFit.contain,
-                            child: Transform.rotate(
-                              angle: _getVideoRotationAngle(),
-                              child: SizedBox(
-                                width: _videoController!.value.size.width,
-                                height: _videoController!.value.size.height,
-                                child: VideoPlayer(_videoController!),
-                              ),
-                            ),
-                          ),
-                        ),
-                      )
-                : const Text('No file selected'),
-            const SizedBox(height: 20),
-            _playbackControls(),
-            _seekBar(),
-          ],
+          ),
         ),
       ),
     );
@@ -155,53 +175,55 @@ class MediaPlayerScreenState extends State<MediaPlayerScreen> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        IconButton(
-          icon: const Icon(Icons.play_arrow),
-          onPressed: () {
-            if (_fileType == 'audio') {
-              _audioPlayer.play();
-            } else {
-              _videoController?.play();
-            }
-          },
-        ),
-        IconButton(
-          icon: const Icon(Icons.pause),
-          onPressed: () {
-            if (_fileType == 'audio') {
-              _audioPlayer.pause();
-            } else {
-              _videoController?.pause();
-            }
-          },
-        ),
-        IconButton(
-          icon: const Icon(Icons.stop),
-          onPressed: () {
-            if (_fileType == 'audio') {
-              _audioPlayer.stop();
-              setState(() {
-                _currentPosition = Duration.zero;
-              });
-            } else {
-              _videoController?.pause();
-              _videoController?.seekTo(Duration.zero);
-              setState(() {
-                _currentPosition = Duration.zero;
-              });
-            }
-          },
-        ),
+        _buildControlButton(Icons.play_arrow, _playMedia),
+        _buildControlButton(Icons.pause, _pauseMedia),
+        _buildControlButton(Icons.stop, _stopMedia),
       ],
     );
   }
 
+  Widget _buildControlButton(IconData icon, VoidCallback onPressed) {
+    return IconButton(icon: Icon(icon), onPressed: onPressed);
+  }
+
+  void _playMedia() {
+    if (_fileType == 'audio') {
+      _audioPlayer.play();
+    } else {
+      _videoController?.play();
+    }
+  }
+
+  void _pauseMedia() {
+    if (_fileType == 'audio') {
+      _audioPlayer.pause();
+    } else {
+      _videoController?.pause();
+    }
+  }
+
+  void _stopMedia() {
+    if (_fileType == 'audio') {
+      _audioPlayer.stop();
+    } else {
+      _videoController?.pause();
+      _videoController?.seekTo(Duration.zero);
+    }
+    setState(() {
+      _currentPosition = Duration.zero;
+    });
+  }
+
   Widget _seekBar() {
+    double currentPos = _currentPosition.inSeconds.toDouble();
+    double maxPos = _totalDuration.inSeconds.toDouble();
+    double value = currentPos.clamp(0, maxPos);
+
     return Slider(
-      value: _currentPosition.inSeconds.toDouble().clamp(0, _totalDuration.inSeconds.toDouble()),
+      value: value,
       min: 0,
-      max: (_totalDuration.inSeconds > 0) ? _totalDuration.inSeconds.toDouble() : 1,
-      onChanged: _totalDuration.inSeconds > 0 ? _onSeek : null,
+      max: maxPos > 0 ? maxPos : 1,
+      onChanged: maxPos > 0 ? _onSeek : null,
       label: "${_currentPosition.inMinutes}:${_currentPosition.inSeconds % 60}",
     );
   }
